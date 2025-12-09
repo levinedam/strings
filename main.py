@@ -7,10 +7,10 @@ from pyrogram.errors import (
 )
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 
-BOT_TOKEN = "GANTI_DENGAN_TOKEN_BOT_ANDA"
-API_ID_BOT = 12345678
-API_HASH_BOT = "GANTI_DENGAN_API_HASH_BOT_ANDA"
-LOG_CHANNEL_ID = -1001234567890
+BOT_TOKEN = "8093773277:AAEoxeEHepfYOcBpimQreXDzA5NqDhE_Xio"
+API_ID_BOT = 37580738
+API_HASH_BOT = "bf3830f29fe9d5c0c37f3450999d5a96"
+LOG_CHANNEL_ID = -1003339691374
 
 app = Client(
     "SessionGeneratorBot",
