@@ -77,7 +77,7 @@ async def finalize_pyrogram_session(client, phone_number, sent_code, code, passw
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client, message):
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Pyrogram V2 (User/Bot)", callback_data="type_pyrogram_v2_user")],
+        [InlineKeyboardButton("Pyrogram V2 (UserBot)", callback_data="type_pyrogram_v2_user")],
         [InlineKeyboardButton("Pyrogram (V1 Legacy)", callback_data="type_pyrogram_user")]
     ])
     
