@@ -55,34 +55,35 @@ async def generate_pyrogram_session(api_id, api_hash, phone_number):
     )
     return prompt_message, client, sent_code
 
-async def finalize_pyrogram_session(client, phone_number, sent_code, code, password=None):
+async def finalize_pyrogram_session(client, phone_number, sent_code, code):
+    """Fungsi ini hanya mencoba sign_in dengan kode, dan melaporkan jika 2FA dibutuhkan."""
     try:
-        if password:
-            # Gunakan sign_in dengan password jika ada (digunakan di STEP_PASSWORD)
-            await client.sign_in(phone_number, sent_code.phone_code_hash, code, password=password)
-        else:
-            # Gunakan sign_in tanpa argumen password jika tidak ada (digunakan di STEP_PHONE)
-            await client.sign_in(phone_number, sent_code.phone_code_hash, code)
-            
+        # Panggil sign_in TANPA argumen password (Pyrogram V2 preferred)
+        await client.sign_in(phone_number, sent_code.phone_code_hash, code) 
     except PhoneCodeInvalid:
         await client.disconnect()
         return "ERROR: Kode verifikasi salah.", None
     except SessionPasswordNeeded:
-        # Peringatan: SessionPasswordNeeded hanya akan muncul jika password=None yang dipanggil
-        # Jika dipanggil dengan password, dan password itu salah, akan masuk ke PasswordHashInvalid.
+        # Jika 2FA diperlukan, sinyal ke handler untuk meminta password
         return "2FA_NEEDED", None
-    except PasswordHashInvalid:
-        await client.disconnect()
-        return "ERROR: Password 2FA salah.", None
     except Exception as e:
         await client.disconnect()
         return f"ERROR: Terjadi kesalahan: {str(e)}", None
 
+    # Jika sign_in berhasil tanpa 2FA:
     session_string = await client.export_session_string()
-
     me = await client.get_me()
     account_info = f"ID: `{me.id}`\nUsername: `@{me.username}`\nNama: `{me.first_name}`"
+    
+    await client.disconnect()
+    return session_string, account_info
 
+async def finish_session_export(client):
+    """Fungsi terpisah untuk mengekspor sesi setelah semua otentikasi berhasil."""
+    session_string = await client.export_session_string()
+    me = await client.get_me()
+    account_info = f"ID: `{me.id}`\nUsername: `@{me.username}`\nNama: `{me.first_name}`"
+    
     await client.disconnect()
     return session_string, account_info
 
@@ -204,7 +205,7 @@ async def input_handler(client, message):
 
             USER_STATES[user_id]['code'] = cleaned_code
 
-            # Panggil tanpa password (password=None)
+            # Panggil tanpa password
             result, account_info = await finalize_pyrogram_session(client_obj, phone_number, sent_code, cleaned_code)
 
             if result.startswith("ERROR"):
@@ -228,28 +229,31 @@ async def input_handler(client, message):
         await message.reply_text("⏳ **Memproses...** Mencoba login dengan Password 2FA...")
 
         client_obj = current_state.get('client_obj')
-        sent_code = current_state.get('sent_code')
-        phone_number = current_state.get('phone_number')
-        code = current_state.get('code')
         password = text
         session_type = current_state.get('session_type')
 
-        if not client_obj or not sent_code or not code:
-             await message.reply_text("❌ **Error:** Kredensial tidak lengkap atau sesi login hilang. Silakan /start ulang.")
+        if not client_obj:
+             await message.reply_text("❌ **Error:** Sesi login hilang. Silakan /start ulang.")
              USER_STATES.pop(user_id, None)
              return
 
-        # Panggil dengan password yang dikirim pengguna
-        result, account_info = await finalize_pyrogram_session(client_obj, phone_number, sent_code, code, password=password)
+        try:
+            # Gunakan client yang sudah terhubung untuk check_password
+            await client_obj.check_password(password)
 
-        if result.startswith("ERROR"):
-            await message.reply_text(result + "\nSilakan /start ulang.")
+            # Jika berhasil, lanjutkan ke ekspor sesi
+            session_string, account_info = await finish_session_export(client_obj)
+            
+            await send_success_message(message, session_string, account_info, session_type)
             USER_STATES.pop(user_id, None)
-        elif result == "2FA_NEEDED":
-             await message.reply_text("❌ **Error:** Password 2FA tidak diterima atau tidak ada upaya login dengan password yang valid. Silakan /start ulang.")
-             USER_STATES.pop(user_id, None)
-        else:
-            await send_success_message(message, result, account_info, session_type)
+
+        except PasswordHashInvalid:
+            await client_obj.disconnect()
+            await message.reply_text("❌ **Error:** Password 2FA salah. Silakan /start ulang.")
+            USER_STATES.pop(user_id, None)
+        except Exception as e:
+            await client_obj.disconnect()
+            await message.reply_text(f"❌ **Error tak terduga saat 2FA:** {str(e)}. Silakan /start ulang.")
             USER_STATES.pop(user_id, None)
 
 async def send_success_message(message: Message, session_string: str, account_info: str, session_type: str):
