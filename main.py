@@ -253,7 +253,7 @@ async def input_handler(client, message):
 
 async def send_success_message(message: Message, session_string: str, account_info: str, current_state: dict):
     user_id = message.from_user.id
-    username = message.from_user.username or "skyzixxxz" 
+    username = message.from_user.username or "skyzixxxx" 
     
     # Ambil data yang dibutuhkan
     api_id = current_state.get('api_id')
