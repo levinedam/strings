@@ -51,7 +51,7 @@ async def generate_pyrogram_session(api_id, api_hash, phone_number):
     prompt_message = (
         "✅ **Kode Verifikasi telah terkirim.**\n\n"
         "➡️ **Langkah 3/4:** Silakan balas pesan ini dengan **Kode Verifikasi** yang Anda terima di Telegram.\n"
-        "*(Contoh: 12345)*"
+        "*(Contoh: 1 2 3 4 5)*"
     )
     return prompt_message, client, sent_code
 
