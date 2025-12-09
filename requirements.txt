@@ -1,2 +1,4 @@
 pyrogram==2.0.101
 telethon==1.34.0
+TgCrypto
+
